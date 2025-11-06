@@ -51,42 +51,65 @@ describe('ContentProcessor', () => {
       });
     });
 
-    test('throws error when paywall detected', async () => {
+    test('attempts extraction even when paywall detected (does not block)', async () => {
       const url = 'https://www.nytimes.com/article';
-      const html = '<html><div>Subscribe to The Times</div></html>';
-
-      await expect(contentProcessor.extractContent(html, url)).rejects.toThrow('Paywall detected');
-    });
-
-    test('throws error when content extraction fails', async () => {
-      const url = 'https://www.nytimes.com/article';
-      const html = '<html><body>Minimal content</body></html>';
-
-      Readability.mockImplementation(() => ({
-        parse: jest.fn(() => null) // Readability returns null when it fails
-      }));
-
-      await expect(contentProcessor.extractContent(html, url)).rejects.toThrow('Failed to extract meaningful content');
-    });
-
-    test('throws error when content too short', async () => {
-      const url = 'https://www.nytimes.com/article';
-      const html = '<html><body><article><p>Short</p></article></body></html>';
+      // HTML with paywall indicator but also some content
+      const html = '<html><body><div>Subscribe to The Times</div><article><h1>Title</h1><p>Some content here that is long enough to be extracted</p></article></body></html>';
 
       const mockArticle = {
         title: 'Title',
-        textContent: 'Short content',
-        content: '<article><p>Short</p></article>',
+        textContent: 'Some content here that is long enough to be extracted. '.repeat(10),
+        content: '<article><h1>Title</h1><p>Some content here that is long enough to be extracted</p></article>',
         byline: null,
         excerpt: null,
-        length: 50 // Too short
+        length: 500
       };
 
       Readability.mockImplementation(() => ({
         parse: jest.fn(() => mockArticle)
       }));
 
+      // Should still extract content even with paywall indicator
+      const result = await contentProcessor.extractContent(html, url);
+      expect(result).toBeDefined();
+      expect(result.title).toBe('Title');
+    });
+
+    test('throws error when content extraction fails completely', async () => {
+      const url = 'https://www.nytimes.com/article';
+      // HTML with no article content, no paragraphs, nothing extractable
+      const html = '<html><body><div>No content here</div></body></html>';
+
+      Readability.mockImplementation(() => ({
+        parse: jest.fn(() => null) // Readability returns null when it fails
+      }));
+
+      // Should throw error when no content can be extracted at all
       await expect(contentProcessor.extractContent(html, url)).rejects.toThrow('Failed to extract meaningful content');
+    });
+
+    test('returns content even when short (lenient minimum)', async () => {
+      const url = 'https://www.nytimes.com/article';
+      const html = '<html><body><article><h1>Title</h1><p>Short content</p></article></body></html>';
+
+      const mockArticle = {
+        title: 'Title',
+        textContent: 'Short content',
+        content: '<article><h1>Title</h1><p>Short content</p></article>',
+        byline: null,
+        excerpt: null,
+        length: 50 // Short but above minimum (20 chars)
+      };
+
+      Readability.mockImplementation(() => ({
+        parse: jest.fn(() => mockArticle)
+      }));
+
+      // Should return content even if short (lenient for WSJ/archived articles)
+      const result = await contentProcessor.extractContent(html, url);
+      expect(result).toBeDefined();
+      expect(result.title).toBe('Title');
+      expect(result.text).toBe('Short content');
     });
 
     test('handles missing author gracefully', async () => {
@@ -113,24 +136,27 @@ describe('ContentProcessor', () => {
       expect(result.title).toBe('Title');
     });
 
-    test('validates minimum content length', async () => {
+    test('returns content above minimum length (20 chars)', async () => {
       const url = 'https://www.nytimes.com/article';
-      const html = '<html><body><p>Short</p></body></html>';
+      const html = '<html><body><article><h1>Title</h1><p>This is content that is longer than the minimum of 20 characters</p></article></body></html>';
 
       const mockArticle = {
         title: 'Title',
-        textContent: 'Short',
-        content: '<p>Short</p>',
+        textContent: 'This is content that is longer than the minimum of 20 characters',
+        content: '<article><h1>Title</h1><p>This is content that is longer than the minimum of 20 characters</p></article>',
         byline: null,
         excerpt: null,
-        length: 5 // Below 500 character minimum
+        length: 70 // Above minimum (20 chars)
       };
 
       Readability.mockImplementation(() => ({
         parse: jest.fn(() => mockArticle)
       }));
 
-      await expect(contentProcessor.extractContent(html, url)).rejects.toThrow('Failed to extract meaningful content');
+      // Should return content above minimum length
+      const result = await contentProcessor.extractContent(html, url);
+      expect(result).toBeDefined();
+      expect(result.length).toBeGreaterThanOrEqual(20);
     });
 
     test('handles JSDOM creation errors', async () => {

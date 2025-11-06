@@ -78,7 +78,7 @@ router.post('/fetch', async (req, res) => {
       }
     } else if (isWSJ(url)) {
       serviceName = 'WSJ';
-      method = 'archive';
+      method = 'multiple'; // WSJ tries multiple methods: cookie-clearing, search-engine, headless, archive
       try {
         html = await wsjService.fetchArticle(url);
       } catch (error) {
@@ -86,10 +86,10 @@ router.post('/fetch', async (req, res) => {
           success: false,
           error: {
             code: 'FETCH_FAILED',
-            message: error.message || 'Failed to fetch WSJ article. WSJ has a hard paywall - only older articles (>6 months) are available via archive.',
+            message: error.message || 'Failed to fetch WSJ article. WSJ has a hard paywall - tried multiple methods (cookie clearing, search engine, headless browser, archive).',
             details: {
               site: 'WSJ',
-              suggestion: 'Try an article older than 6 months, or check Wayback Machine directly'
+              suggestion: 'WSJ actively blocks bypass attempts. For older articles (>6 months), archive method may work. Recent articles are very difficult to access.'
             }
           }
         });

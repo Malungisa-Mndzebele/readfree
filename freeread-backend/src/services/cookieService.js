@@ -108,9 +108,19 @@ class CookieService {
     
     // Common paywall indicators
     const paywallIndicators = [
+      // NYT-specific
       'subscribe to the times',
       "you've reached your article limit",
       'log in or create a free account',
+      // WSJ-specific
+      'subscribe to continue reading',
+      'subscribe to wsj',
+      'wall street journal subscription',
+      'wsj.com subscription',
+      'log in to continue reading',
+      'sign in to continue',
+      'this article is for subscribers only',
+      // Generic paywall indicators
       'continue reading',
       'data-testid="paywall"',
       'class="paywall"',
@@ -118,7 +128,10 @@ class CookieService {
       'data-module="paywall"',
       'article limit reached',
       'subscribe now',
-      'become a subscriber'
+      'become a subscriber',
+      'subscribe to read',
+      'subscription required',
+      'premium content'
     ];
 
     // Bot protection / CAPTCHA indicators
@@ -129,7 +142,11 @@ class CookieService {
       'checking your browser',
       'just a moment',
       'ddos protection',
-      'cloudflare'
+      'cloudflare',
+      'geo.captcha-delivery.com',
+      'ct.captcha-delivery.com',
+      'browser verification',
+      'verify you are human'
     ];
 
     // Check for bot protection first (this blocks access entirely)

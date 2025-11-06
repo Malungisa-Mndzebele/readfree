@@ -45,11 +45,17 @@ class ContentProcessor {
 
       // If Readability failed or is too short, try fallback selectors
       if (!article || !article.textContent || article.textContent.length < this.minContentLength) {
-        const fallback = this.extractWithFallback(document);
+        const fallback = this.extractWithFallback(document, url);
         
         // Return fallback if it has any text at all
         if (fallback && fallback.text && fallback.text.length > 0) {
           return fallback;
+        }
+
+        // Try aggressive extraction - extract content even if paywall is detected
+        const aggressiveExtract = this.extractAggressively(document, url);
+        if (aggressiveExtract && aggressiveExtract.text && aggressiveExtract.text.length > this.minContentLength) {
+          return aggressiveExtract;
         }
 
         // Final attempt: if Readability produced anything, return it even if short
@@ -107,15 +113,29 @@ class ContentProcessor {
   }
 
   /**
-   * Fallback extraction using common NYT/article selectors
+   * Fallback extraction using common article selectors (works for NYT, WSJ, and other sites)
    * @param {Document} document
+   * @param {string} url - Original article URL (for domain detection)
    * @returns {{title:string, text:string, html:string, author:string|null, excerpt:string|null, length:number}|null}
    */
-  extractWithFallback(document) {
+  extractWithFallback(document, url) {
     try {
+      // Get domain from URL for fallback title
+      let fallbackTitle = 'Untitled';
+      try {
+        if (url) {
+          const urlObj = new URL(url);
+          fallbackTitle = urlObj.hostname;
+        }
+      } catch (e) {
+        // URL parsing failed, use default
+      }
+
       const title = (document.querySelector('h1') && document.querySelector('h1').textContent) || 
                     (document.querySelector('title') && document.querySelector('title').textContent) || 
-                    'nytimes.com';
+                    fallbackTitle;
+      
+      // Common article selectors (works for NYT, WSJ, and other news sites)
       const candidates = [
         'article',
         '[data-testid="article-body"]',
@@ -124,8 +144,18 @@ class ContentProcessor {
         'main article',
         '[itemprop="articleBody"]',
         '[data-module="ArticleBody"]',
+        // WSJ-specific selectors
+        '[data-module="ArticleBodyContainer"]',
+        '.wsj-article-body',
+        '.article-body',
+        '[class*="ArticleBody"]',
+        '[class*="article-body"]',
+        // Generic selectors
         'div[class*="article"]',
-        'div[class*="story"]'
+        'div[class*="story"]',
+        'div[class*="content"]',
+        '.content-body',
+        '[role="article"]'
       ];
 
       let container = null;
@@ -201,6 +231,105 @@ class ContentProcessor {
   }
 
   /**
+   * Aggressive extraction - tries to extract content even when paywall is detected
+   * Looks for article content in various places, including hidden elements
+   * @param {Document} document
+   * @param {string} url - Original article URL
+   * @returns {{title:string, text:string, html:string, author:string|null, excerpt:string|null, length:number}|null}
+   */
+  extractAggressively(document, url) {
+    try {
+      // Get title
+      const title = (document.querySelector('h1') && document.querySelector('h1').textContent) || 
+                    (document.querySelector('title') && document.querySelector('title').textContent) || 
+                    'Untitled';
+
+      // Try to find article content in various ways
+      const contentSelectors = [
+        'article',
+        '[data-module="ArticleBody"]',
+        '[data-module="ArticleBodyContainer"]',
+        '.wsj-article-body',
+        '.article-body',
+        '[class*="article-body"]',
+        '[class*="ArticleBody"]',
+        'main article',
+        'main [role="article"]',
+        '#article-body',
+        '.article-content',
+        '[itemprop="articleBody"]'
+      ];
+
+      let allText = '';
+      let allHtml = '';
+
+      // Try each selector
+      for (const selector of contentSelectors) {
+        try {
+          const elements = document.querySelectorAll(selector);
+          elements.forEach(el => {
+            if (el) {
+              // Get all paragraphs from this element
+              const paras = el.querySelectorAll('p');
+              paras.forEach(p => {
+                const text = (p.textContent || '').trim();
+                if (text.length > 50 && !text.toLowerCase().includes('subscribe') && !text.toLowerCase().includes('cookie')) {
+                  allText += text + '\n\n';
+                  allHtml += p.outerHTML;
+                }
+              });
+            }
+          });
+        } catch (e) {}
+      }
+
+      // If we didn't find much, try to get all paragraphs from the page
+      if (allText.length < 200) {
+        try {
+          const allParas = document.querySelectorAll('p');
+          allParas.forEach(p => {
+            const text = (p.textContent || '').trim();
+            // Filter out navigation, footer, and paywall text
+            if (text.length > 50 && 
+                !text.toLowerCase().includes('subscribe') && 
+                !text.toLowerCase().includes('cookie') &&
+                !text.toLowerCase().includes('log in') &&
+                !text.toLowerCase().includes('sign up') &&
+                !p.closest('nav') &&
+                !p.closest('footer') &&
+                !p.closest('[class*="paywall"]')) {
+              allText += text + '\n\n';
+              allHtml += p.outerHTML;
+            }
+          });
+        } catch (e) {}
+      }
+
+      if (allText.length < this.minContentLength) {
+        return null;
+      }
+
+      const author = (document.querySelector('[rel="author"], [itemprop="author"], .byline') &&
+        (document.querySelector('[rel="author"], [itemprop="author"], .byline').textContent || '').trim()) || null;
+      
+      const excerpt = (document.querySelector('meta[name="description"], meta[property="og:description"]') &&
+        document.querySelector('meta[name="description"], meta[property="og:description"]').getAttribute('content')) || null;
+
+      return {
+        title: title.trim(),
+        text: allText.trim(),
+        html: '<div id="readability-page-1" class="page">' + allHtml + '</div>',
+        author: author,
+        excerpt: excerpt,
+        length: allText.trim().length
+      };
+    } catch (err) {
+      console.error('Aggressive extraction error:', err);
+      return null;
+    }
+  }
+
+  /**
    * Detects if HTML contains paywall indicators
    * @param {string} html - HTML content to check
    * @returns {boolean} - True if paywall detected
@@ -213,9 +342,19 @@ class ContentProcessor {
     const htmlLower = html.toLowerCase();
     
     const paywallIndicators = [
+      // NYT-specific
       'subscribe to the times',
       "you've reached your article limit",
       'log in or create a free account',
+      // WSJ-specific
+      'subscribe to continue reading',
+      'subscribe to wsj',
+      'wall street journal subscription',
+      'wsj.com subscription',
+      'log in to continue reading',
+      'sign in to continue',
+      'this article is for subscribers only',
+      // Generic paywall indicators
       'continue reading',
       'data-testid="paywall"',
       'class="paywall"',
@@ -223,7 +362,10 @@ class ContentProcessor {
       'data-module="paywall"',
       'article limit reached',
       'subscribe now',
-      'become a subscriber'
+      'become a subscriber',
+      'subscribe to read',
+      'subscription required',
+      'premium content'
     ];
 
     return paywallIndicators.some(indicator => htmlLower.includes(indicator.toLowerCase()));
